@@ -2,7 +2,7 @@
 
 ![Western Astrology MCP Server by DivineAPI](https://raw.githubusercontent.com/DivineAPI/DivineAPI/main/assets/mcp-western-astrology.png)
 
-Connect Claude, Cursor, VS Code or any MCP client to DivineAPI's Western astrology data: natal charts, synastry, transits, composite charts, progressions, planetary returns and prenatal charts, returned as JSON (and SVG for wheel charts).
+Connect Claude, Cursor, VS Code or any Model Context Protocol (MCP) client to DivineAPI's Western astrology data: natal charts, synastry, transits, composite charts, progressions, planetary returns and prenatal charts, returned as JSON (and SVG for wheel charts).
 
 [![Docs](https://img.shields.io/badge/docs-developers.divineapi.com-blue)](https://developers.divineapi.com/western-api)
 [![Trial](https://img.shields.io/badge/14--day%20trial-start-green)](https://divineapi.com/start-trial)
@@ -10,6 +10,7 @@ Connect Claude, Cursor, VS Code or any MCP client to DivineAPI's Western astrolo
 [![PyPI](https://img.shields.io/badge/pypi-divineapi--western--astrology--mcp-orange)](https://pypi.org/project/divineapi-western-astrology-mcp/)
 [![Status](https://img.shields.io/badge/status-status.divineapi.com-brightgreen)](https://status.divineapi.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/DivineAPI/mcp-western-astrology)
 
 Hosted server URL:
 

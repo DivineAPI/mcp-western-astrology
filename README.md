@@ -112,17 +112,17 @@ If a client can send only a single bearer token and no custom headers, send `Aut
 
 ## Tool groups
 
-Tool counts below are counted from the `@mcp.tool` definitions in [`server.py`](server.py) of this repository (version 1.5.0). The hosted server is updated more often and can list more tools; your MCP client always shows the live list.
+The table groups the tools defined in [`server.py`](server.py). The hosted server is updated more often and can offer more tools; your MCP client always shows the live list.
 
-| Group | Tools | What they cover | Host |
-|---|---|---|---|
-| Natal | 10 | Planetary positions, house cusps, aspect table, natal wheel chart (SVG), general sign report, general house report, Moon phases, ascendant report, Moon phase calendar, natal insights | astroapi-4 (wheel on astroapi-8) |
-| Synastry | 13 | Planetary positions and house cusps for both people, bi-wheel chart, inter-chart aspect table, harmonious / conflicting / contrasting / intense aspect readings, physical, emotional, sexual, spiritual and financial compatibility | astroapi-4 (wheel and aspect table on astroapi-8) |
-| Transits | 12 | Basic transit, custom transit (any moment and place), daily, weekly and monthly transits, transit house overlay, full transit, retrograde and combustion transits, transit wheel chart, transit planetary positions, planetary ingress | astroapi-4 and astroapi-8 |
-| Composite | 4 | Composite planetary positions, house cusps, aspect table, wheel chart | astroapi-8 |
-| Advanced natal | 11 | Arabic lots, asteroid positions, fixed stars list and details, planetary midpoints, eclipses, declinations and parallels, aspect patterns, chart shape, other minor bodies, dominants | astroapi-8 |
-| Progressions and returns | 5 | Planet returns list and return details, progressed lunar events, planetary arc directions, secondary progressions | astroapi-8 |
-| Prenatal | 2 | Prenatal list and prenatal details | astroapi-8 |
+| Group | What they cover | Host |
+|---|---|---|
+| Natal | Planetary positions, house cusps, aspect table, natal wheel chart (SVG), general sign report, general house report, Moon phases, ascendant report, Moon phase calendar, natal insights | astroapi-4 (wheel on astroapi-8) |
+| Synastry | Planetary positions and house cusps for both people, bi-wheel chart, inter-chart aspect table, harmonious / conflicting / contrasting / intense aspect readings, physical, emotional, sexual, spiritual and financial compatibility | astroapi-4 (wheel and aspect table on astroapi-8) |
+| Transits | Basic transit, custom transit (any moment and place), daily, weekly and monthly transits, transit house overlay, full transit, retrograde and combustion transits, transit wheel chart, transit planetary positions, planetary ingress | astroapi-4 and astroapi-8 |
+| Composite | Composite planetary positions, house cusps, aspect table, wheel chart | astroapi-8 |
+| Advanced natal | Arabic lots, asteroid positions, fixed stars list and details, planetary midpoints, eclipses, declinations and parallels, aspect patterns, chart shape, other minor bodies, dominants | astroapi-8 |
+| Progressions and returns | Planet returns list and return details, progressed lunar events, planetary arc directions, secondary progressions | astroapi-8 |
+| Prenatal | Prenatal list and prenatal details | astroapi-8 |
 
 All tools are read-only (`readOnlyHint: true`) and each tool call makes one request to the DivineAPI REST API.
 
@@ -215,7 +215,7 @@ Tropical, calculated with Swiss Ephemeris. For sidereal (Vedic) charts use the [
 Yes. The natal, synastry (bi-wheel), transit and composite wheel tools return chart images.
 
 **My client lists synastry or transit tools that are not in the table. Why?**
-The table was counted from version 1.5.0 of this repository's `server.py`. The hosted server and the PyPI package can be newer.
+The table follows this repository's `server.py`. The hosted server and the PyPI package can be newer, and your client always shows the live list.
 
 **I want the REST API, not MCP.**
 Use the [birth-chart-api](https://github.com/DivineAPI/birth-chart-api) repo or the [API reference](https://developers.divineapi.com/western-api). SDKs: `pip install divineapi`, `npm install divineapi`, `composer require divineapi/divineapi`.

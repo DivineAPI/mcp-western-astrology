@@ -1,0 +1,29 @@
+{
+  "name": "divineapi-western-astrology",
+  "version": "1.0.0",
+  "description": "Western astrology for Gemini CLI: natal charts, synastry, composite charts, transits and progressions from DivineAPI's hosted server.",
+  "mcpServers": {
+    "divineapi-western": {
+      "httpUrl": "https://mcp.divineapi.com/western/mcp",
+      "headers": {
+        "X-Divine-Api-Key": "${DIVINE_API_KEY}",
+        "X-Divine-Auth-Token": "${DIVINE_AUTH_TOKEN}"
+      },
+      "timeout": 60000
+    }
+  },
+  "settings": [
+    {
+      "name": "DivineAPI API key",
+      "description": "From your DivineAPI dashboard (https://divineapi.com).",
+      "envVar": "DIVINE_API_KEY",
+      "sensitive": true
+    },
+    {
+      "name": "DivineAPI auth token",
+      "description": "From your DivineAPI dashboard.",
+      "envVar": "DIVINE_AUTH_TOKEN",
+      "sensitive": true
+    }
+  ]
+}

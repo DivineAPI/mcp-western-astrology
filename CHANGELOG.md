@@ -1,5 +1,83 @@
 # Changelog
 
+## [1.10.0] - 2026-11-20
+
+### Added
+
+**Two new Location API tools (DV-743, the last gaps from the DV-681 review).** Docs: developers.divineapi.com/geo-location-api/timezone-api and /geo-location-health; Postman and docs tickets DV-724 and DV-723.
+
+- **`divine_western_get_timezone`** wraps `POST https://geolocation.divineapi.com/timezone`. It returns the UTC offset that applied at a place on a given local date and time, with summer time and historical changes: `timezone_value` (decimal hours, the value for `tzone`), `utc_offset`, `local_datetime`, `utc_datetime`, `is_dst` and `ambiguous`, plus the matched `place`. The place is a `place_id` from `divine_western_search_location` (the documented input), or `lat` and `lon` (nearest known place), or an IANA `timezone` name; the service accepts all three (`src/routes/datetime.route.js`). The tool rejects zero or several of them locally, because the API silently prefers `place_id` when more than one is sent. Leave `day`/`month`/`year`/`hour`/`min` out for the current time; `sec` defaults to 0.
+- **`divine_western_geolocation_health`** wraps `GET https://geolocation.divineapi.com/health`. It needs no credentials and costs no credits.
+
+`divine_western_search_location` and the server instructions now point to `divine_western_get_timezone` for a birth-date `tzone`, instead of telling the model to work out the offset from the IANA name itself: the search's `timezone_value` is today's offset.
+
+Verified live 2026-11-20: Kolkata 1990-07-15 14:30 is +5.5; New York at the same moment is -4 with `is_dst` true; Delhi on 1943-01-01 is +6.5 (wartime time); 2026-03-08 02:30 New York (clocks forward) is a 422 with the reason; 2026-11-01 01:30 New York (clocks back) returns `ambiguous` true. Tool count: 59 -> 61.
+
+## [1.9.0] - 2026-11-09
+
+### Added
+
+**New tool: `divine_western_search_location` (DV-648).** Wraps the Location API, `POST https://geolocation.divineapi.com/location` (parent ticket DV-614; docs: developers.divineapi.com/geo-location-api/location-api). It takes `place` (at least 3 characters after trimming, checked before any call) and returns up to 10 matches, largest population first, with `latitude`, `longitude`, `timezone` (IANA name), `timezone_value` and more, plus the GeoNames attribution. The server instructions now point to it for turning a place name into `lat`, `lon` and a timezone.
+
+`timezone_value` is the zone's offset **today**, so for a birth date in a zone with summer time it can be wrong by an hour (New York: -5 now, -4 on 1990-07-15, verified live). The tool description says so and tells the model to work out the birth-date offset from the IANA timezone.
+
+The Location API reports errors with real HTTP status codes and its own message and details. `_call_divine_api` gains an optional `on_http_error` hook, and the tool uses a Location-specific handler; every other tool keeps the generic `_handle_http_error`. Same implementation as the Indian and Horoscope & Numerology MCPs. Tool count: 58 -> 59.
+
+### Fixed
+
+README tool count: it said 57, but Persona Chart (1.6.0) made it 58; the Advanced natal group is 12, not 11. The section-header comments in `server.py` for Advanced natal and Transit now say 12 as well.
+
+## [1.8.0] - 2026-09-25
+
+### Changed
+
+**`divine_western_planetary_positions` now calls astroapi-8 instead of astroapi-4 (DV-433 / DV-445).** The astroapi-4 version is the older implementation and omits **Vertex**, while `aspect-patterns` (on astroapi-8) lists Vertex as a pattern participant. A client reported exactly that cross-endpoint mismatch: a sign stellium containing Vertex from aspect-patterns, with no Vertex in planetary-positions to check it against.
+
+Verified 2026-09-25 with the client's own chart (10 Jan 2002, 21:08, Sainte-Agathe-des-Monts):
+
+- all 17 bodies both hosts return have **identical** values, fields and types;
+- astroapi-8 adds **Vertex** (18 bodies), placed after MC and before Chiron — here 321.488° Aquarius, which agrees with the Aquarius stellium aspect-patterns reported for the same chart;
+- `house_system` letter codes and `lan` behave identically on both hosts.
+
+The response envelope changes from `{"success": 1, ...}` to `{"status": "success", "code": 200, ...}`. `_call_divine_api` already handles both, since other tools on astroapi-8 use the newer shape, so the tool's behaviour is unaffected apart from the extra body.
+
+aspect-patterns never returns Vertex's degree, so this tool is now the way to get it. Whether aspect-patterns uses *exactly* this longitude internally can't be confirmed from outside — only the sign agreement is verified. The tool description says only what is verified.
+
+## [1.7.0] - 2026-09-21
+
+### Added
+
+**`hide_chart_name` on all eight chart endpoints (DV-396).** Hides the participant name(s) drawn at the bottom left of a generated chart image. `"YES"` to hide, `"NO"` (default) to show — matching the API, so existing output is unchanged unless a caller opts in.
+
+Added to `divine_western_composite_natal_wheel_chart`, `divine_western_synastry_natal_wheel_chart`, `divine_western_planet_return_details`, `divine_western_persona_chart`, `divine_western_prenatal_details`, `divine_western_planetary_arc_directions`, `divine_western_secondary_progressions` and `divine_western_transit_wheel_chart`. Tool count unchanged at 58.
+
+Exposed as a per-tool argument rather than a field on `WesternSynastryInput` / `WesternNatalInput` / `WesternFullTransitInput`, because those models are shared with ~30 other tools that have no chart to label.
+
+**Only four of the eight currently do anything.** Verified live 2026-09-21 — every endpoint accepts the parameter, but it has an observable effect on:
+
+| Endpoint | Effect |
+| --- | --- |
+| `composite/natal-wheel-chart` | name `<tspan>` removed from the SVG |
+| `synastry/natal-wheel-chart` | name `<tspan>` removed from the SVG |
+| `planet-return-details` | chart shrinks ~1,077 bytes |
+| `transit/wheel-chart` | chart shrinks ~1,078 bytes |
+
+On the other four it is inert: `persona-chart`'s SVG contains no `<text>` elements at all, and `prenatal-details`, `planetary-arc-directions` and `secondary-progressions` return no chart image. Exposed anyway for parity with the API and so the tools keep working if those endpoints gain charts later; the field description says it affects rendered charts only.
+
+## [1.6.0] - 2026-09-14
+
+### Added
+
+**`divine_western_persona_chart`: Persona Chart for a chosen natal planet.** POST /western-api/v1/persona-chart on astroapi-8. Casts the full chart for the exact moment - within the first year of life - that the transiting Sun reaches the natal degree of the chosen `persona_planet`. Returns `persona_planet`, `persona_datetime`, `planetary_positions`, `house_cusps`, `aspect_table` (persona-to-persona) and `persona_natal_aspect` (persona-planet-to-natal-planet). A dedicated `WesternPersonaChartInput` extends `WesternNatalInput` with `persona_planet` (required), plus optional `node_type`, `output_include` and `graphic_layout`. Brings the Western tool count to 58.
+
+`output_include` defaults to `raw_data` (~21 KB, data only). Chart images must be requested explicitly and are large - roughly 0.5 MB per SVG. `all` is rejected by this server with an explanatory error because it returns ~4.3 MB, which will overflow an MCP client's context.
+
+### Fixed
+
+**`house_system` accepted only 9 of the API's 16 Swiss Ephemeris codes.** `VALID_HOUSE_SYSTEM_LETTERS` was derived from `HOUSE_SYSTEM_MAP.values()`, and because `A` and `E` are both Equal, the value-derived set silently omitted `A`, `D`, `V`, `X`, `S`, `T` and `N` - so those were rejected locally with a ValueError even though the API accepts them. This blocked the Persona Chart documentation's own example, which uses `house_system="A"`. The letter set is now explicit and independent of the friendly-name map, and friendly names were added for the newly reachable systems (`equal-asc`, `equal-mc`, `vehlow`, `meridian`, `axial-rotation`, `sripati`, `topocentric`, `polich-page`, `whole-sign-aries`). Verified 2026-09-14: all 16 letters return success on both astroapi-4 and astroapi-8.
+
+**Pinned `mcp[cli]` to `<2`.** The dependency was `>=1.2.0` with no upper bound. mcp 2.x renamed `FastMCP` to `MCPServer` and removed `mcp.server.fastmcp`, which this server imports at module level, so any image rebuild would have installed mcp 2.x and crashed the container on startup. Production runs 1.28.1.
+
 ## [1.5.0] - 2026-07-11
 
 ### Added

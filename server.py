@@ -181,7 +181,7 @@ if _TRANSPORT == "http":
 
 _SERVER_INSTRUCTIONS = """DivineAPI Western astrology: Natal, Synastry, Transit, Composite, Progressions, planetary returns, and fixed stars.
 
-Input conventions: dates as separate day, month, year fields (plus hour, min, sec); place is a plain city string; lat and lon are decimals; tzone is a decimal UTC offset. house_system accepts friendly names (placidus, koch, whole-sign, campanus, regiomontanus, porphyry, equal, morinus, alcabitius) or single-letter codes; it defaults to placidus.
+Input conventions: dates as separate day, month, year fields (plus hour, min, sec); place is a plain city string; lat and lon are decimals; tzone is a decimal UTC offset; if you only have a place name, call divine_western_search_location to get its lat, lon and place_id, then divine_western_get_timezone with that place_id and the birth or event date and time for the tzone that applied then (the search's timezone_value is today's offset, which can be an hour off for dates in summer time). house_system accepts friendly names (placidus, koch, whole-sign, campanus, regiomontanus, porphyry, equal, morinus, alcabitius) or single-letter codes; it defaults to placidus.
 
 Chaining: the list/details tools work in pairs. Call divine_western_fixed_stars_list, divine_western_planet_returns_list, or divine_western_prenatal_list first, then pass a key from the result to the matching _details tool.
 
@@ -202,6 +202,7 @@ mcp = FastMCP(
 
 API_HOST_4 = "https://astroapi-4.divineapi.com"
 API_HOST_8 = "https://astroapi-8.divineapi.com"
+GEOLOCATION_HOST = "https://geolocation.divineapi.com"  # Location API (place search, timezone, health)
 
 DIVINE_API_KEY = os.environ.get("DIVINE_API_KEY", "")
 DIVINE_AUTH_TOKEN = os.environ.get("DIVINE_AUTH_TOKEN", "")
@@ -261,16 +262,123 @@ HOUSE_SYSTEM_MAP = {
     "regiomontanus": "R",
     "campanus": "C",
     "equal": "E",
+    "equal-asc": "A",
+    "equal_asc": "A",
+    "equal-mc": "D",
+    "equal_mc": "D",
+    "vehlow": "V",
+    "vehlow-equal": "V",
     "whole-sign": "W",
     "whole_sign": "W",
     "wholesign": "W",
+    "meridian": "X",
+    "axial-rotation": "X",
     "morinus": "M",
+    "sripati": "S",
+    "topocentric": "T",
+    "polich-page": "T",
     "alcabitius": "B",
+    "whole-sign-aries": "N",
+    "whole_sign_aries": "N",
 }
-VALID_HOUSE_SYSTEM_LETTERS = set(HOUSE_SYSTEM_MAP.values())
-HOUSE_SYSTEM_FRIENDLY_NAMES = "placidus, koch, porphyry, regiomontanus, campanus, equal, whole-sign, morinus, alcabitius"
+# The full Swiss Ephemeris code set the Divine Western API accepts. Verified
+# 2026-09-14 against both astroapi-4 (/planetary-positions) and astroapi-8
+# (/persona-chart): all sixteen return success. This is deliberately NOT
+# derived from HOUSE_SYSTEM_MAP.values() — "A" and "E" are both Equal, so a
+# value-derived set silently dropped A, D, V, X, S, T and N and rejected them
+# locally even though the API supports them.
+VALID_HOUSE_SYSTEM_LETTERS = {
+    "P", "K", "O", "R", "C", "A", "E", "D",
+    "V", "W", "X", "M", "S", "T", "B", "N",
+}
+HOUSE_SYSTEM_FRIENDLY_NAMES = (
+    "placidus, koch, porphyry, regiomontanus, campanus, equal, equal-asc, equal-mc, "
+    "vehlow, whole-sign, meridian, morinus, sripati, topocentric, alcabitius, whole-sign-aries"
+)
 
 VALID_DOMINANTS_METHODS = {"TRADITIONAL", "MODERN"}
+
+# ── Chart name visibility (DV-391 / DV-396) ──
+# hide_chart_name: "YES" hides the participant name(s) rendered at the bottom
+# left of the generated chart image. Default "NO" matches the API, so existing
+# output is unchanged unless a caller asks.
+#
+# Verified live 2026-09-21 across all eight endpoints Anubhav listed. Every one
+# ACCEPTS the parameter, but it only has an observable effect on four:
+#   composite/natal-wheel-chart   - removes the <tspan> name from the SVG
+#   synastry/natal-wheel-chart    - removes the <tspan> name from the SVG
+#   planet-return-details         - chart shrinks by ~1,077 bytes
+#   transit/wheel-chart           - chart shrinks by ~1,078 bytes
+# On the other four it is currently inert: persona-chart's SVG contains no
+# <text> elements at all, and prenatal-details, planetary-arc-directions and
+# secondary-progressions return no chart image to label. It is exposed on all
+# eight for parity with the API and so the tools keep working if those
+# endpoints gain charts later.
+VALID_HIDE_CHART_NAME = {"YES", "NO"}
+HIDE_CHART_NAME_HINT = (
+    "Hide the participant name(s) drawn at the bottom left of the chart image. "
+    "'YES' to hide, 'NO' (default) to show. Affects the rendered chart only - "
+    "never the numeric data. No effect on endpoints that return no chart image."
+)
+
+
+def _resolve_hide_chart_name(value: str | None) -> str:
+    """Normalise and validate hide_chart_name. Raises ValueError.
+
+    Non-string input (an unresolved pydantic FieldInfo when a tool function is
+    called directly rather than through the MCP layer) is treated as unset.
+    """
+    if not isinstance(value, str):
+        value = None
+    v = (value or "NO").strip().upper()
+    if v not in VALID_HIDE_CHART_NAME:
+        raise ValueError(f"Invalid hide_chart_name '{value}'. Must be 'YES' or 'NO'.")
+    return v
+
+
+def _apply_hide_chart_name(payload: dict, value: str | None) -> str | None:
+    """Attach hide_chart_name to a payload. Returns an error string or None."""
+    try:
+        payload["hide_chart_name"] = _resolve_hide_chart_name(value)
+    except ValueError as e:
+        return f"Error: {e}"
+    return None
+
+# ── Persona Chart (astroapi-8 /western-api/v1/persona-chart) ──
+VALID_PERSONA_PLANETS = {
+    "sun", "moon", "mercury", "venus", "mars",
+    "jupiter", "saturn", "uranus", "neptune", "pluto",
+}
+# Case-sensitive on the wire. Verified 2026-09-14: all twelve return success,
+# lowercase is rejected with 422.
+VALID_GRAPHIC_LAYOUTS = {
+    "PLANETS_ONLY",
+    "PLANETS_DEGREES",
+    "PLANETS_DEGREES_SIGNS",
+    "INNER_V1_HOUSE_CUSPS_PLANETS",
+    "INNER_V1_HOUSE_CUSPS_PLANETS_DEGREES",
+    "INNER_V1_HOUSE_CUSPS_PLANETS_DEGREES_SIGNS",
+    "INNER_V2_HOUSE_CUSPS_PLANETS",
+    "INNER_V2_HOUSE_CUSPS_PLANETS_DEGREES",
+    "INNER_V2_HOUSE_CUSPS_PLANETS_DEGREES_SIGNS",
+    "OUTER_HOUSE_CUSPS_PLANETS",
+    "OUTER_HOUSE_CUSPS_PLANETS_DEGREES",
+    "OUTER_HOUSE_CUSPS_PLANETS_DEGREES_SIGNS",
+}
+VALID_NODE_TYPES = {"meannode", "truenode"}
+# Image tokens return hundreds of KB to >1 MB each. raw_data is the API default
+# and the only one safe to hand back through an MCP client's context window.
+VALID_OUTPUT_INCLUDE = {
+    "raw_data",
+    "persona_wheel_chart_svg",
+    "persona_wheel_chart_base64",
+    "natal_wheel_chart_svg",
+    "natal_wheel_chart_base64",
+    "persona_x_natal_wheel_chart_svg",
+    "persona_x_natal_wheel_chart_base64",
+    "all",
+}
+_IMAGE_OUTPUT_TOKENS = VALID_OUTPUT_INCLUDE - {"raw_data"}
 
 TOOL_ANNOTATIONS = {
     "readOnlyHint": True,
@@ -362,6 +470,103 @@ class WesternNatalInput(BaseModel):
     @classmethod
     def validate_house_system(cls, v: str) -> str:
         return _resolve_house_system(v)
+
+
+class WesternPersonaChartInput(WesternNatalInput):
+    """Input for the Persona Chart endpoint (astroapi-8).
+
+    Extends the standard Western natal birth data with the persona-specific
+    fields. ``year`` is inherited and IS required — the published Request Body
+    table omits it, but the API returns 422 "year: This field is required."
+    without it (verified 2026-09-14).
+    """
+
+    persona_planet: str = Field(
+        ...,
+        description=(
+            "Planet whose natal degree the transiting Sun must reach: sun, moon, mercury, "
+            "venus, mars, jupiter, saturn, uranus, neptune or pluto. Case-insensitive. "
+            "Note 'sun' reduces to a one-year-later Solar Return chart."
+        ),
+    )
+    node_type: str | None = Field(
+        default=None,
+        description="Lunar node convention for North/South Node: 'meannode' or 'truenode'. Omit for the API default.",
+    )
+    output_include: str = Field(
+        default="raw_data",
+        description=(
+            "Response size control. Comma-separated tokens. Default 'raw_data' returns the "
+            "numeric data only (~21 KB). Chart-image tokens are very large and are usually a "
+            "mistake through MCP: persona_wheel_chart_svg / natal_wheel_chart_svg / "
+            "persona_x_natal_wheel_chart_svg (~0.5 MB each) and their _base64 variants. "
+            "'all' is rejected here because it returns ~4.3 MB."
+        ),
+    )
+    graphic_layout: str | None = Field(
+        default=None,
+        description=(
+            "Wheel-image layout; affects images only, never the numeric data. UPPERCASE exactly. "
+            "One of PLANETS_ONLY, PLANETS_DEGREES, PLANETS_DEGREES_SIGNS, or the "
+            "INNER_V1_/INNER_V2_/OUTER_ HOUSE_CUSPS_PLANETS[_DEGREES][_SIGNS] variants. "
+            "Only meaningful together with an image token in output_include."
+        ),
+    )
+
+    @field_validator("persona_planet")
+    @classmethod
+    def validate_persona_planet(cls, v: str) -> str:
+        pl = (v or "").strip().lower()
+        if pl not in VALID_PERSONA_PLANETS:
+            raise ValueError(
+                f"Invalid persona_planet '{v}'. Must be one of: "
+                f"{', '.join(sorted(VALID_PERSONA_PLANETS))}"
+            )
+        return pl
+
+    @field_validator("node_type")
+    @classmethod
+    def validate_node_type(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        nt = str(v).strip().lower()
+        if nt not in VALID_NODE_TYPES:
+            raise ValueError(f"Invalid node_type '{v}'. Must be 'meannode' or 'truenode'.")
+        return nt
+
+    @field_validator("graphic_layout")
+    @classmethod
+    def validate_graphic_layout(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        gl = str(v).strip()
+        if gl not in VALID_GRAPHIC_LAYOUTS:
+            raise ValueError(
+                f"Invalid graphic_layout '{v}'. The API is case-sensitive; must be exactly one of: "
+                f"{', '.join(sorted(VALID_GRAPHIC_LAYOUTS))}"
+            )
+        return gl
+
+    @field_validator("output_include")
+    @classmethod
+    def validate_output_include(cls, v: str) -> str:
+        raw = (v or "").strip() or "raw_data"
+        tokens = [t.strip() for t in raw.split(",") if t.strip()]
+        if not tokens:
+            return "raw_data"
+        unknown = [t for t in tokens if t not in VALID_OUTPUT_INCLUDE]
+        if unknown:
+            raise ValueError(
+                f"Invalid output_include token(s): {', '.join(unknown)}. Allowed: "
+                f"{', '.join(sorted(VALID_OUTPUT_INCLUDE))}"
+            )
+        if "all" in tokens:
+            raise ValueError(
+                "output_include='all' returns ~4.3 MB and is refused by this MCP server because it "
+                "will overflow the client context. Request 'raw_data' for the chart data, or a single "
+                "specific image token (e.g. 'persona_wheel_chart_svg', ~0.5 MB) if you truly need one."
+            )
+        return ",".join(tokens)
 
 
 class WesternSynastryInput(BaseModel):
@@ -545,8 +750,12 @@ async def _call_divine_api(
     base_url: str = API_HOST_4,
     api_key: str | None = None,
     auth_token: str | None = None,
+    on_http_error=None,
 ) -> str:
     """Make a POST request to Divine API and return formatted JSON response.
+
+    on_http_error, when given, turns a non-2xx response into the error text
+    instead of the default _handle_http_error.
 
     Raises ToolError on any failure (non-2xx, network error, or an upstream
     error envelope returned with HTTP 200) so MCP clients see isError: true
@@ -568,7 +777,7 @@ async def _call_divine_api(
             response.raise_for_status()
             data = response.json()
     except httpx.HTTPStatusError as e:
-        raise ToolError(_handle_http_error(e)) from e
+        raise ToolError((on_http_error or _handle_http_error)(e)) from e
     except httpx.TimeoutException as e:
         raise ToolError("Request timed out. The Divine API server may be slow. Please try again.") from e
     except httpx.ConnectError as e:
@@ -623,6 +832,33 @@ def _handle_http_error(e: httpx.HTTPStatusError) -> str:
         return f"Error: API returned status {status}. Response: {body}"
 
 
+def _location_http_error(e: httpx.HTTPStatusError) -> str:
+    """Error text for the Location API, which sends its own message and per-field details.
+
+    Its 403 means the plan lacks the Location API, not the astrology APIs, so the
+    generic _handle_http_error wording would mislead.
+    """
+    status = e.response.status_code
+    try:
+        body = e.response.json()
+    except Exception:
+        return _handle_http_error(e)
+    if not isinstance(body, dict):
+        return _handle_http_error(e)
+    message = body.get("message") or "Location API error."
+    details = (body.get("error") or {}).get("details")
+    if isinstance(details, dict):
+        detail_text = "; ".join(f"{k}: {v}" for k, v in details.items())
+    elif isinstance(details, list):
+        detail_text = "; ".join(str(d) for d in details)
+    else:
+        detail_text = ""
+    hint = ""
+    if status == 403:
+        hint = " Your DivineAPI plan does not include the Location API; check your subscription at https://divineapi.com/pricing"
+    return f"Error: Location API returned {status}: {message}" + (f" ({detail_text})" if detail_text else "") + hint
+
+
 # ──────────────────────────────────────────────
 # Payload Helpers
 # ──────────────────────────────────────────────
@@ -645,6 +881,23 @@ def _natal_payload(params: WesternNatalInput) -> dict:
         "lan": params.lan,
         "house_system": params.house_system,
     }
+
+
+def _persona_chart_payload(params: WesternPersonaChartInput) -> dict:
+    """Standard natal payload plus the persona-specific fields.
+
+    Optional fields are only added when set, so an omitted node_type or
+    graphic_layout leaves the API on its own defaults rather than sending an
+    empty string.
+    """
+    payload = _natal_payload(params)
+    payload["persona_planet"] = params.persona_planet
+    payload["output_include"] = params.output_include
+    if params.node_type:
+        payload["node_type"] = params.node_type
+    if params.graphic_layout:
+        payload["graphic_layout"] = params.graphic_layout
+    return payload
 
 
 def _synastry_payload(params: WesternSynastryInput) -> dict:
@@ -713,13 +966,22 @@ def _full_transit_payload(params) -> dict:
 async def divine_western_planetary_positions(params: WesternNatalInput, ctx: Context) -> str:
     """Get planetary positions in the Western natal chart.
 
-    Returns positions of Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn,
-    Uranus, Neptune, Pluto with sign, degree, and house placement.
+    Returns 18 bodies with sign, degree, house, element and modality: the
+    Ascendant, Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus,
+    Neptune, Pluto, North and South Node, MC, Vertex, Chiron, Part of Fortune
+    and Lilith. Use this for Vertex's degree: divine_western_aspect_patterns
+    can list Vertex as a pattern participant but does not return its degree.
     For a complete natal reading, also call divine_western_house_cusps,
     divine_western_aspect_table, and divine_western_natal_insights in parallel.
     """
     api_key, auth_token = _get_credentials(ctx)
-    return await _call_divine_api("/western-api/v1/planetary-positions", _natal_payload(params), API_HOST_4, api_key=api_key, auth_token=auth_token)
+    # astroapi-8, not astroapi-4 (DV-433 / DV-445). The astroapi-4 version is
+    # the older implementation and omits Vertex, which aspect-patterns (also
+    # on astroapi-8) does use - the cross-endpoint mismatch a client reported.
+    # Verified 2026-09-25: all 17 bodies both hosts share return identical
+    # values, fields and types; -8 adds Vertex and uses the newer
+    # {"status": "success", ...} envelope, which _call_divine_api handles.
+    return await _call_divine_api("/western-api/v1/planetary-positions", _natal_payload(params), API_HOST_8, api_key=api_key, auth_token=auth_token)
 
 
 @mcp.tool(name="divine_western_house_cusps", annotations=TOOL_ANNOTATIONS)
@@ -931,7 +1193,11 @@ async def divine_western_synastry_house_cusps(params: WesternSynastryInput, ctx:
 
 
 @mcp.tool(name="divine_western_synastry_natal_wheel_chart", annotations=TOOL_ANNOTATIONS)
-async def divine_western_synastry_natal_wheel_chart(params: WesternSynastryInput, ctx: Context) -> str:
+async def divine_western_synastry_natal_wheel_chart(
+    params: WesternSynastryInput,
+    ctx: Context,
+    hide_chart_name: str = Field(default="NO", description=HIDE_CHART_NAME_HINT),
+) -> str:
     """Generate a bi-wheel synastry chart image for two persons.
 
     Returns an image URL showing both natal charts overlaid in a bi-wheel
@@ -939,7 +1205,11 @@ async def divine_western_synastry_natal_wheel_chart(params: WesternSynastryInput
     the outer wheel for visual aspect analysis.
     """
     api_key, auth_token = _get_credentials(ctx)
-    return await _call_divine_api("/western-api/v2/synastry/natal-wheel-chart", _synastry_payload(params), API_HOST_8, api_key=api_key, auth_token=auth_token)
+    payload = _synastry_payload(params)
+    err = _apply_hide_chart_name(payload, hide_chart_name)
+    if err:
+        return err
+    return await _call_divine_api("/western-api/v2/synastry/natal-wheel-chart", payload, API_HOST_8, api_key=api_key, auth_token=auth_token)
 
 
 @mcp.tool(name="divine_western_synastry_aspect", annotations=TOOL_ANNOTATIONS)
@@ -1072,7 +1342,7 @@ async def divine_western_synastry_financial_compat(params: WesternSynastryInput,
 
 
 # ══════════════════════════════════════════════
-# TRANSIT TOOLS (11) - astroapi-4 & astroapi-8
+# TRANSIT TOOLS (12) - astroapi-4 & astroapi-8
 # ══════════════════════════════════════════════
 
 
@@ -1265,14 +1535,22 @@ async def divine_western_planet_combustion_transit(params: WesternTransitPlanetI
 
 
 @mcp.tool(name="divine_western_transit_wheel_chart", annotations=TOOL_ANNOTATIONS)
-async def divine_western_transit_wheel_chart(params: WesternFullTransitInput, ctx: Context) -> str:
+async def divine_western_transit_wheel_chart(
+    params: WesternFullTransitInput,
+    ctx: Context,
+    hide_chart_name: str = Field(default="NO", description=HIDE_CHART_NAME_HINT),
+) -> str:
     """Generate a transit wheel chart overlaying current transits on the natal chart.
 
     Returns a visual wheel chart showing natal planet positions in the inner
     ring and current transit positions in the outer ring.
     """
     api_key, auth_token = _get_credentials(ctx)
-    return await _call_divine_api("/western-api/v1/transit/wheel-chart", _full_transit_payload(params), API_HOST_8, api_key=api_key, auth_token=auth_token)
+    payload = _full_transit_payload(params)
+    err = _apply_hide_chart_name(payload, hide_chart_name)
+    if err:
+        return err
+    return await _call_divine_api("/western-api/v1/transit/wheel-chart", payload, API_HOST_8, api_key=api_key, auth_token=auth_token)
 
 
 @mcp.tool(name="divine_western_transit_planetary_positions", annotations=TOOL_ANNOTATIONS)
@@ -1343,7 +1621,11 @@ async def divine_western_composite_aspect_table(params: WesternSynastryInput, ct
 
 
 @mcp.tool(name="divine_western_composite_natal_wheel_chart", annotations=TOOL_ANNOTATIONS)
-async def divine_western_composite_natal_wheel_chart(params: WesternSynastryInput, ctx: Context) -> str:
+async def divine_western_composite_natal_wheel_chart(
+    params: WesternSynastryInput,
+    ctx: Context,
+    hide_chart_name: str = Field(default="NO", description=HIDE_CHART_NAME_HINT),
+) -> str:
     """Generate a visual composite chart wheel image for two persons.
 
     Returns an image URL of the composite (midpoint) chart wheel showing
@@ -1351,11 +1633,15 @@ async def divine_western_composite_natal_wheel_chart(params: WesternSynastryInpu
     in a traditional circular format.
     """
     api_key, auth_token = _get_credentials(ctx)
-    return await _call_divine_api("/western-api/v1/composite/natal-wheel-chart", _synastry_payload(params), API_HOST_8, api_key=api_key, auth_token=auth_token)
+    payload = _synastry_payload(params)
+    err = _apply_hide_chart_name(payload, hide_chart_name)
+    if err:
+        return err
+    return await _call_divine_api("/western-api/v1/composite/natal-wheel-chart", payload, API_HOST_8, api_key=api_key, auth_token=auth_token)
 
 
 # ══════════════════════════════════════════════
-# ADVANCED NATAL TOOLS (11) -astroapi-8.divineapi.com
+# ADVANCED NATAL TOOLS (12) -astroapi-8.divineapi.com
 # ══════════════════════════════════════════════
 
 
@@ -1515,6 +1801,44 @@ async def divine_western_dominants(
     return await _call_divine_api("/western-api/v1/dominants", payload, API_HOST_8, api_key=api_key, auth_token=auth_token)
 
 
+@mcp.tool(name="divine_western_persona_chart", annotations=TOOL_ANNOTATIONS)
+async def divine_western_persona_chart(
+    params: WesternPersonaChartInput,
+    ctx: Context,
+    hide_chart_name: str = Field(default="NO", description=HIDE_CHART_NAME_HINT),
+) -> str:
+    """Cast a Persona Chart for a chosen natal planet.
+
+    A persona chart is the full chart for the exact moment - within the first
+    year of life - when the transiting Sun reaches the natal degree of the
+    chosen persona_planet. The search starts one day after birth and scans up
+    to 366 days forward, so persona_datetime always falls in roughly the first
+    year of life.
+
+    Returns persona_planet, persona_datetime, planetary_positions, house_cusps,
+    aspect_table (persona-to-persona aspects) and persona_natal_aspect
+    (persona-planet-to-natal-planet aspects).
+
+    Defaults to data only (~21 KB). Chart images must be asked for explicitly
+    via output_include and are large (~0.5 MB per SVG); 'all' is refused.
+
+    Note: persona_planet='sun' is accepted but reduces to a one-year-later
+    Solar Return chart, since the Sun cannot have a persona relative to itself.
+    """
+    api_key, auth_token = _get_credentials(ctx)
+    payload = _persona_chart_payload(params)
+    err = _apply_hide_chart_name(payload, hide_chart_name)
+    if err:
+        return err
+    return await _call_divine_api(
+        "/western-api/v1/persona-chart",
+        payload,
+        API_HOST_8,
+        api_key=api_key,
+        auth_token=auth_token,
+    )
+
+
 # ══════════════════════════════════════════════
 # PROGRESSIONS & RETURNS TOOLS (5) -astroapi-8.divineapi.com
 # ══════════════════════════════════════════════
@@ -1564,6 +1888,7 @@ async def divine_western_planet_return_details(
     return_lon: str = Field(..., description="Longitude of the return location (e.g., '72.8774')"),
     return_tzone: str = Field(..., description="Timezone offset of the return location (e.g., '5.5')"),
     return_place: str = Field(..., description="Return place name (e.g., 'Mumbai, Maharashtra, India')"),
+    hide_chart_name: str = Field(default="NO", description=HIDE_CHART_NAME_HINT),
 ) -> str:
     """Get detailed planetary return chart information.
 
@@ -1584,6 +1909,9 @@ async def divine_western_planet_return_details(
         "return_tzone": return_tzone,
         "return_place": return_place,
     })
+    err = _apply_hide_chart_name(payload, hide_chart_name)
+    if err:
+        return err
     return await _call_divine_api("/western-api/v1/planet-return-details", payload, API_HOST_8, api_key=api_key, auth_token=auth_token)
 
 
@@ -1615,6 +1943,7 @@ async def divine_western_planetary_arc_directions(
     progressed_day: str = Field(..., description="Target date day for the direction (e.g., '13')"),
     progressed_month: str = Field(..., description="Target date month for the direction (e.g., '06')"),
     progressed_year: str = Field(..., description="Target date year for the direction (e.g., '2021')"),
+    hide_chart_name: str = Field(default="NO", description=HIDE_CHART_NAME_HINT),
 ) -> str:
     """Get planetary arc directions for the natal chart.
 
@@ -1631,6 +1960,9 @@ async def divine_western_planetary_arc_directions(
         "progressed_month": progressed_month,
         "progressed_year": progressed_year,
     })
+    err = _apply_hide_chart_name(payload, hide_chart_name)
+    if err:
+        return err
     return await _call_divine_api("/western-api/v1/planetary-arc-directions", payload, API_HOST_8, api_key=api_key, auth_token=auth_token)
 
 
@@ -1646,6 +1978,7 @@ async def divine_western_secondary_progressions(
     progressed_sec: str = Field(..., description="Target time second (e.g., '20')"),
     progressed_type: str = Field(..., description="Progression rate method (e.g., 'ARMC1_NAIBOD')"),
     planet: str | None = Field(default=None, description="Optional planet to focus the progression on (e.g., 'Venus')"),
+    hide_chart_name: str = Field(default="NO", description=HIDE_CHART_NAME_HINT),
 ) -> str:
     """Get secondary progressions for the natal chart.
 
@@ -1668,6 +2001,9 @@ async def divine_western_secondary_progressions(
     })
     if planet is not None:
         payload["planet"] = planet
+    err = _apply_hide_chart_name(payload, hide_chart_name)
+    if err:
+        return err
     return await _call_divine_api("/western-api/v1/secondary-progressions", payload, API_HOST_8, api_key=api_key, auth_token=auth_token)
 
 
@@ -1700,6 +2036,7 @@ async def divine_western_prenatal_details(
     params: WesternNatalInput,
     ctx: Context,
     prenatal_key: str = Field(..., description="Prenatal event identifier from divine_western_prenatal_list (e.g., 'SYZYGY_NM_P_648635040000')"),
+    hide_chart_name: str = Field(default="NO", description=HIDE_CHART_NAME_HINT),
 ) -> str:
     """Get detailed prenatal eclipse and lunation analysis for the natal chart.
 
@@ -1712,7 +2049,132 @@ async def divine_western_prenatal_details(
     api_key, auth_token = _get_credentials(ctx)
     payload = _natal_payload(params)
     payload["prenatal_key"] = prenatal_key
+    err = _apply_hide_chart_name(payload, hide_chart_name)
+    if err:
+        return err
     return await _call_divine_api("/western-api/v1/prenatal-details", payload, API_HOST_8, api_key=api_key, auth_token=auth_token)
+
+
+# ══════════════════════════════════════════════
+# LOCATION — geolocation.divineapi.com
+# ══════════════════════════════════════════════
+
+
+@mcp.tool(name="divine_western_search_location", annotations=TOOL_ANNOTATIONS)
+async def divine_western_search_location(
+    place: str = Field(..., description="Place name to search for, at least 3 characters (e.g. 'Patna', 'New York')", min_length=3, max_length=200),
+    ctx: Context = None,
+) -> str:
+    """Search for a place by name and get its coordinates and timezone, for the place, lat, lon and tzone inputs of the other tools.
+
+    Returns up to 10 matches, largest population first, each with place_id,
+    name, full_name (e.g. 'Patna, Bihar, India'), country, admin1 (state or
+    region), latitude, longitude, timezone (IANA name, e.g. Asia/Kolkata),
+    timezone_value (UTC offset in hours) and population. Matching is by
+    name prefix. When several places match, confirm with the user which one
+    is meant.
+
+    timezone_value is the zone's offset today. For a birth date in a zone
+    with summer time (most of the Americas and Europe) or with historical
+    changes, the offset on that date can differ (New York is -5 in winter
+    and -4 in summer), so for a birth or event date call divine_western_get_timezone
+    with the place_id and that date and time, and pass its timezone_value
+    as tzone.
+
+    Place data (c) GeoNames (geonames.org), CC BY 4.0: keep the attribution
+    when showing results.
+    """
+    query = place.strip()
+    if len(query) < 3:
+        raise ToolError("Error: place must be at least 3 characters, not counting leading or trailing spaces.")
+    api_key, auth_token = _get_credentials(ctx)
+    return await _call_divine_api(
+        "/location", {"place": query}, base_url=GEOLOCATION_HOST,
+        api_key=api_key, auth_token=auth_token, on_http_error=_location_http_error,
+    )
+
+
+@mcp.tool(name="divine_western_get_timezone", annotations=TOOL_ANNOTATIONS)
+async def divine_western_get_timezone(
+    place_id: int | None = Field(default=None, description="place_id of a place from divine_western_search_location (e.g. 1275004 for Kolkata). Give this, or lat and lon, or timezone", ge=1),
+    lat: float | None = Field(default=None, description="Latitude, with lon, instead of place_id: the nearest known place is used (e.g. 28.6139)", ge=-90, le=90),
+    lon: float | None = Field(default=None, description="Longitude, with lat (e.g. 77.2090)", ge=-180, le=180),
+    timezone: str | None = Field(default=None, description="IANA timezone name instead of a place (e.g. 'America/New_York')", max_length=64),
+    day: int | None = Field(default=None, description="Local day of the month (1-31). Give day, month, year, hour and min together, or none of them for the current time", ge=1, le=31),
+    month: int | None = Field(default=None, description="Local month (1-12)", ge=1, le=12),
+    year: int | None = Field(default=None, description="Local year (1800-2200)", ge=1800, le=2200),
+    hour: int | None = Field(default=None, description="Local hour, 24-hour clock (0-23)", ge=0, le=23),
+    min: int | None = Field(default=None, description="Local minute (0-59)", ge=0, le=59),
+    sec: int | None = Field(default=None, description="Local second (0-59, default 0)", ge=0, le=59),
+    ctx: Context = None,
+) -> str:
+    """Get the UTC offset that applied at a place on a given local date and time, with summer time (DST) and historical changes, for the tzone input of the other tools.
+
+    Pass the place_id from divine_western_search_location (or lat and lon, or an
+    IANA timezone name) and the local date and time of the birth or event.
+    Leave the date and time out for the current time.
+
+    Returns place (the matched place, or null for a timezone name),
+    timezone (IANA name), local_datetime, utc_datetime, timezone_value
+    (decimal hours, e.g. 5.5 or -4: pass it as tzone), utc_offset (e.g.
+    '+05:30'), is_dst and ambiguous. ambiguous is true when that local time
+    happened twice because the clocks went back; the API then uses the
+    first of the two (still summer time), so say so. A local time skipped
+    when the clocks went forward is rejected: ask for a time after the
+    change. Examples: New York on 1990-07-15 14:30 was -4 (summer time);
+    Delhi on 1943-01-01 was +6.5 (wartime time).
+
+    Place data (c) GeoNames (geonames.org), CC BY 4.0: keep the attribution
+    when showing results.
+    """
+    tz_name = timezone.strip() if isinstance(timezone, str) else None
+    given = [name for name, present in (
+        ("place_id", place_id is not None),
+        ("lat/lon", lat is not None or lon is not None),
+        ("timezone", bool(tz_name)),
+    ) if present]
+    if not given:
+        raise ToolError("Error: give place_id (from divine_western_search_location), or lat and lon, or an IANA timezone name.")
+    if len(given) > 1:
+        raise ToolError(f"Error: give only one of place_id, lat and lon, or timezone (got {' and '.join(given)}).")
+    if (lat is None) != (lon is None):
+        raise ToolError("Error: lat and lon go together; give both.")
+    payload = {
+        "place_id": place_id, "lat": lat, "lon": lon, "timezone": tz_name,
+        "day": day, "month": month, "year": year, "hour": hour, "min": min, "sec": sec,
+    }
+    api_key, auth_token = _get_credentials(ctx)
+    return await _call_divine_api(
+        "/timezone", payload, base_url=GEOLOCATION_HOST,
+        api_key=api_key, auth_token=auth_token, on_http_error=_location_http_error,
+    )
+
+
+@mcp.tool(name="divine_western_geolocation_health", annotations=TOOL_ANNOTATIONS)
+async def divine_western_geolocation_health() -> str:
+    """Check whether the Location API service (geolocation.divineapi.com, behind divine_western_search_location and divine_western_get_timezone) is up.
+
+    Needs no credentials and uses no credits. Returns status 'success' with
+    data {"service": "location-api", "status": "ok"} when healthy. Use it to
+    tell a Location API outage apart from an input or plan problem.
+    """
+    url = f"{GEOLOCATION_HOST}/health"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers={"Accept": "application/json"}, timeout=10.0)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        raise ToolError(f"Error: the Location API health check returned HTTP {e.response.status_code}: the service is down or degraded.") from e
+    except httpx.TimeoutException as e:
+        raise ToolError("Error: the Location API health check timed out after 10 seconds.") from e
+    except httpx.ConnectError as e:
+        raise ToolError("Error: could not connect to geolocation.divineapi.com.") from e
+    except Exception as e:
+        raise ToolError(f"Unexpected error - {type(e).__name__}: {str(e)}") from e
+    if not isinstance(data, dict) or data.get("status") != "success":
+        raise ToolError(f"Error: the Location API reported a problem: {json.dumps(data, ensure_ascii=False)[:300]}")
+    return json.dumps(data, indent=2, ensure_ascii=False)
 
 
 # ──────────────────────────────────────────────
